@@ -7,9 +7,10 @@ import time
 import urllib3
 import os
 from bs4 import BeautifulSoup
-from colorama import Fore, init
-from twocaptcha import TwoCaptcha  # CAPTCHA solver (2Captcha)
+from colorama import Fore, Style, init
+from twocaptcha import TwoCaptcha
 import undetected_chromedriver as uc
+from selenium.webdriver.common.by import By
 
 # Initialize colorama
 init(autoreset=True)
@@ -23,46 +24,6 @@ HEADERS = {
 }
 
 CAPTCHA_KEYWORDS = ["captcha", "verify", "recaptcha", "i'm not a robot"]
-
-# Display the header with colors
-def print_header():
-    print(Fore.YELLOW + Style.BRIGHT + """
-    ********************************************
-    *                                          *
-    *    Brute Force Login Tool (CLI)          *
-    *    Author: De Nafman                     *
-    *    For Educational and Ethical Hacking   *
-    *                                          *
-    ********************************************
-
-            Welcome to Brute Lab!
-
-    =====================================================
-    ⚠️  DISCLAIMER: This tool is intended solely for ethical hacking purposes within controlled lab environments only.
-    ⚠️  Make sure you have legal permission to test any system.
-    =====================================================
-
-    Select from the available options to proceed:
-
-    -- `basic` Mode: Uses standard HTTP POST requests for basic login forms.
-    -- `cloudflare` Mode: Uses cloudscraper to bypass Cloudflare's JS challenge.
-    -- `browser` Mode: Automates a real browser using Selenium (headless mode) for full form submission and CAPTCHA bypass.
-
-    Instructions:
-    1. Enter the target URL for the login form.
-    2. Provide the username to brute-force.
-    3. Provide the path to the password file (wordlist).
-    4. Choose your preferred mode of operation (basic, cloudflare, or browser).
-    5. If using browser mode, specify the path to the ChromeDriver.
-    6. If using cloudflare mode , provide 2captcha api-key.
-
-    Example usage:
-      python Brute_lab.py http://example.com/login user /path/to/wordlist.txt --mode browser --driver /path/to/chromedriver
-    """)
-
-# Pause before proceeding
-def pause_for_user_input():
-    input(Fore.CYAN + "\nPress Enter to continue with the brute force operation...")
 
 def detect_form_fields(url):
     try:
@@ -227,6 +188,47 @@ def selenium_stealth_mode(args, user_field, pass_field):
     driver.quit()
     print(Fore.RED + "[-] Password not found.")
 
+def print_header():
+    print(Fore.YELLOW + Style.BRIGHT + """
+    ********************************************
+    *                                          *
+    *    Brute Force Login Tool (CLI)          *
+    *    Author: De Nafman                     *
+    *    For Educational and Ethical Hacking   *
+    *                                          *
+    ********************************************
+
+            Welcome to Brute Lab!
+
+    =====================================================
+    ⚠️  DISCLAIMER: This tool is intended solely for ethical hacking purposes within controlled lab environments only.
+    ⚠️  Make sure you have legal permission to test any system.
+    =====================================================
+
+    Select from the available options to proceed:
+
+    -- `basic` Mode: Uses standard HTTP POST requests for basic login forms.
+    -- `cloudflare` Mode: Uses cloudscraper to bypass Cloudflare's JS challenge.
+    -- `browser` Mode: Automates a real browser using Selenium (headless mode) for full form submission and CAPTCHA bypass.
+
+    Instructions:
+    1. Enter the target URL for the login form.
+    2. Provide the username to brute-force.
+    3. Provide the path to the password file (wordlist).
+    4. Choose your preferred mode of operation (basic, cloudflare, or browser).
+    5. If using browser mode, specify the path to the ChromeDriver.
+    6. If using cloudflare mode , provide 2captcha api-key.
+
+    Example usage:
+      python Brute_lab.py http://example.com/login user /path/to/wordlist.txt --mode browser --captcha-api <key>
+    """)
+
+def pause_for_user_input():
+    choice = input(Fore.CYAN + "\nPress [Enter] to continue or type [Q] to quit: ").strip().lower()
+    if choice == 'q':
+        print(Fore.RED + "[!] Exiting...")
+        exit()
+
 def main():
     print(Fore.GREEN + """
 ==============================================
@@ -235,9 +237,9 @@ def main():
 ==============================================
 WARNING: Use only with legal authorization.
 """)
-    if input(Fore.YELLOW + "Press [Enter] to continue or [Q] to quit: ").strip().lower() == "q":
-        print(Fore.RED + "[!] Exiting...")
-        return
+
+    pause_for_user_input()
+    print_header()
 
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("url", help="Target login URL")
