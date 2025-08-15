@@ -21,3 +21,5 @@ wsproto==1.2.0
 cloudscraper
 colorama-0.4.6
 twocaptcha-0.0.1
+undetected-chromedriver
+
